@@ -1,6 +1,6 @@
 # 赛鸭（saiyia）
 
-**[中文](README.md) | [English](README.en.md) | [Español](README.es.md) | [日本語](README.ja.md)**
+**[English](README.en.md) | [Español](README.es.md) | [中文](README.md) | [日本語](README.ja.md)**
 
 一个开源的语音 AI 网关服务端。
 
