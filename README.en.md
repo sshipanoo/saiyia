@@ -95,14 +95,16 @@ The response is a raw PCM stream with `Content-Type: audio/L16; rate=22050; chan
 
 ## Language support
 
-The gateway itself doesn't lock you into any language — the ceiling is set by the DashScope models it proxies to:
+The gateway itself doesn't lock you into any language — the ceiling is set by the DashScope models it proxies to. **One thing worth clarifying up front**: DashScope's speech models (recognition/synthesis) are primarily built for Chinese and Asian languages — this is not "every mainstream language is supported." European languages like Spanish, French, or German are currently outside the main coverage of paraformer / CosyVoice on the speech side; test against the official Playground before relying on it. Text chat is not affected by this — any language works there.
 
-| Capability | How language is controlled |
-|---|---|
-| `chat/completions` | No language restriction — the model understands and replies in whatever language your prompt uses, no extra configuration needed |
-| `asr` (full-recording transcription) | Controlled by the `language_hints` field in the request body, defaults to `["zh", "en"]`; pass other language codes (e.g. `["ja"]`, `["ko"]`) as recognition hints — see the [paraformer-v2 docs](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) for the full list of supported languages |
-| `asr/stream` (real-time recognition) | This path is a transparent relay of the DashScope protocol — language/model is entirely up to what the client specifies in the `run-task` message's `parameters`; the gateway does not restrict or rewrite anything |
-| `audio/tts` / `/tts/stream` | Determined by the `voice` parameter in the request body — different voices correspond to different languages/accents; see the [CosyVoice voice list](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) for available options |
+| Capability | How language is controlled | Known supported mainstream languages |
+|---|---|---|
+| `chat/completions` | No language restriction — the model understands and replies in whatever language your prompt uses, no extra configuration needed | Chinese, English, Japanese, Korean, French, German, Spanish and other mainstream languages all work for chat (this is the LLM's general language ability, a separate thing from the speech-specific models below) |
+| `asr` (full-recording transcription) | Controlled by the `language_hints` field in the request body, defaults to `["zh", "en"]`; pass other language codes as recognition hints | Chinese (including dialects like Cantonese), English, Japanese, Korean — check the [paraformer-v2 docs](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) for the current, up-to-date language list |
+| `asr/stream` (real-time recognition) | Transparent relay — language/model is entirely up to what the client specifies in the `run-task` message's `parameters`; the gateway does not restrict or rewrite anything | Same as above (paraformer-realtime-v2) |
+| `audio/tts` / `/tts/stream` | Determined by the `voice` parameter in the request body — different voices correspond to different languages/accents | Chinese (including regional-accent voices) and English are the primary coverage; Japanese/Korean voices vary — check the [CosyVoice voice list](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) for what's currently available |
+
+If your hardware targets users speaking European languages, swap out the speech recognition/synthesis legs for a different provider (the proxy layer is swappable — just point the relevant functions in `proxy.py` at a different API; the account system and overall architecture don't need to change). Chat isn't affected and works as-is.
 
 UI-facing strings (error messages, etc.) are currently hardcoded in Chinese — i18n for those hasn't been done yet. If your client targets non-Chinese-speaking users, we'd suggest translating on the client side for now; the gateway just returns the raw text in the `detail` field, which doesn't affect functionality. PRs adding i18n for server-side error messages are welcome.
 
