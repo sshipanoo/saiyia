@@ -31,8 +31,10 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS：按你实际接入的客户端来源改，硬件端一般不需要浏览器 CORS（不是从网页发起请求），
-# 这里默认放开，方便本地/局域网调试；生产部署建议收紧成具体域名列表。
+# CORS: adjust this to match your actual client origins. Hardware clients
+# generally don't need browser CORS at all (they're not making requests from a
+# web page). Left wide open by default for local/LAN development convenience —
+# for production deployments, tighten this to a specific list of domains.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

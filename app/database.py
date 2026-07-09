@@ -25,8 +25,9 @@ Base = declarative_base()
 
 
 class User(Base):
-    """最小可用的账号模型：不含任何订阅/支付字段——这是一个开源的语音网关，
-    要不要收费、怎么收费，由使用它的人自己决定，不在这个仓库里绑死。"""
+    """Minimal account model: no subscription/payment fields at all — this is
+    an open-source voice gateway, whether and how to charge is up to whoever
+    deploys it, not something this repo bakes in."""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -34,7 +35,8 @@ class User(Base):
     hashed_password = Column(String(255), nullable=True)
     display_name = Column(String(100), nullable=True)
     is_active = Column(Boolean, default=True)
-    # token 版本号：登出/改密码时 +1，使该用户所有已签发的旧 JWT 立即失效（JWT 撤销机制）
+    # Token version: incremented on logout/password change, instantly invalidating
+    # every JWT issued to this user before that point (JWT revocation mechanism)
     token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -51,7 +53,8 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # 轻量迁移：给已存在的 users 表补 token_version 列（幂等，create_all 不会改已有表）
+        # Lightweight migration: backfill the token_version column on an existing
+        # users table (idempotent — create_all won't alter tables that already exist)
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0")
         )

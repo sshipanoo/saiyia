@@ -15,18 +15,20 @@ class Settings(BaseSettings):
     secret_key: str = _INSECURE_SECRET
     access_token_expire_days: int = 7
 
-    # 阿里云百炼（DashScope）：对话、语音识别、语音合成都走这一个 key
+    # Alibaba Cloud Model Studio (DashScope): chat, speech recognition, and
+    # speech synthesis all go through this one key
     alibaba_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com"
 
-    # 服务自身的公网地址。录音文件识别是异步任务，DashScope 需要从一个公网 URL
-    # 回源下载音频，所以要把临时音频文件暴露成 URL 供它下载。
+    # This service's own public-facing address. File-based transcription is an
+    # async task, and DashScope needs a public URL to fetch the audio from, so
+    # temporary audio files need to be exposed as a URL for it to download.
     public_base_url: str = "http://localhost:8000"
 
-    app_name: str = "赛鸭"
+    app_name: str = "saiyia"
     debug: bool = False
 
-    # 限流
+    # Rate limiting
     rate_limit_per_minute: int = 60
 
     class Config:
@@ -37,12 +39,13 @@ class Settings(BaseSettings):
 def _validate_settings(s: Settings) -> None:
     if not s.debug and s.secret_key == _INSECURE_SECRET:
         raise RuntimeError(
-            "SECRET_KEY 使用了不安全的默认值。生产环境必须通过环境变量或 .env 设置 SECRET_KEY"
+            "SECRET_KEY is using the insecure default value. "
+            "You must set SECRET_KEY via an environment variable or .env in production"
         )
     if not s.debug and len(s.secret_key) < 32:
-        raise RuntimeError("SECRET_KEY 长度不足 32 字符")
+        raise RuntimeError("SECRET_KEY must be at least 32 characters long")
     if not s.alibaba_api_key:
-        _log.warning("ALIBABA_API_KEY 未设置，对话/语音接口会全部失败")
+        _log.warning("ALIBABA_API_KEY is not set — chat/speech endpoints will all fail")
 
 
 @lru_cache()

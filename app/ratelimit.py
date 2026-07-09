@@ -1,7 +1,8 @@
-"""接口限流器。
+"""Endpoint rate limiter.
 
-用 slowapi 内存存储（单进程够用，硬件网关场景不需要 Redis 这种额外依赖）。
-认证接口优先按 user_id 限流，未认证时回退到 IP。
+Uses slowapi's in-memory storage (fine for a single process — a hardware
+gateway doesn't need an extra dependency like Redis for this). Authenticated
+requests are rate-limited by user_id first, falling back to IP when unauthenticated.
 """
 from slowapi import Limiter
 from slowapi.util import get_remote_address

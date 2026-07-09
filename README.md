@@ -106,7 +106,7 @@ The gateway itself doesn't lock you into any language — the ceiling is set by 
 
 If your hardware targets users speaking European languages, swap out the speech recognition/synthesis legs for a different provider (the proxy layer is swappable — just point the relevant functions in `proxy.py` at a different API; the account system and overall architecture don't need to change). Chat isn't affected and works as-is.
 
-UI-facing strings (error messages, etc.) are currently hardcoded in Chinese — i18n for those hasn't been done yet. If your client targets non-Chinese-speaking users, we'd suggest translating on the client side for now; the gateway just returns the raw text in the `detail` field, which doesn't affect functionality. PRs adding i18n for server-side error messages are welcome.
+All server-side strings (error messages, log lines, etc.) are in English by default, with no i18n layer — the gateway just returns the raw text in the `detail` field. If your client targets non-English-speaking users, translate on the client side. PRs adding i18n for server-side messages are welcome.
 
 ## Project structure
 

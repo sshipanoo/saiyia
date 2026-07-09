@@ -11,7 +11,8 @@ from app.ratelimit import limiter
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
-# 预生成的假哈希：登录时即使用户不存在也跑一次 verify，消除"用户是否存在"的时序差异（防枚举）
+# Pre-generated dummy hash: run a verify() even when the user doesn't exist during
+# login, so response timing doesn't leak whether the account exists (anti-enumeration)
 _DUMMY_HASH = get_password_hash("timing_attack_mitigation_dummy_value")
 
 
@@ -24,13 +25,13 @@ class RegisterRequest(BaseModel):
     @classmethod
     def _validate_password(cls, v: str) -> str:
         if len(v) < 10:
-            raise ValueError("密码至少 10 位")
+            raise ValueError("Password must be at least 10 characters")
         if len(v) > 128:
-            raise ValueError("密码过长（最多 128 位）")
+            raise ValueError("Password too long (128 characters max)")
         if not any(c.isalpha() for c in v):
-            raise ValueError("密码需包含字母")
+            raise ValueError("Password must contain a letter")
         if not any(c.isdigit() for c in v):
-            raise ValueError("密码需包含数字")
+            raise ValueError("Password must contain a digit")
         return v
 
     @field_validator("display_name")
@@ -85,8 +86,9 @@ async def get_current_user(
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
-    # JWT 撤销校验：token 里的 tv 必须等于用户当前 token_version。
-    # 登出/改密码会让 token_version +1，使旧 token 立即失效。
+    # JWT revocation check: the token's tv claim must match the user's current
+    # token_version. Logout/password change bumps token_version, instantly
+    # invalidating any older tokens.
     if payload.get("tv", 0) != user.token_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
 
@@ -120,7 +122,8 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     user = result.scalar_one_or_none()
 
     if not user or not user.hashed_password:
-        # 用户不存在也跑一次假 verify，让响应时间与"存在但密码错"一致，消除时序枚举
+        # Run a dummy verify() even when the user doesn't exist, so timing matches
+        # the "exists but wrong password" case and doesn't leak account existence
         verify_password(req.password, _DUMMY_HASH)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
@@ -138,7 +141,8 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/logout")
 async def logout(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """全端登出：token_version +1，使该用户所有已签发的旧 JWT 立即失效。"""
+    """Log out everywhere: bump token_version, instantly invalidating every JWT
+    ever issued to this user."""
     current_user.token_version += 1
     await db.commit()
     return {"status": "logged out"}
@@ -152,13 +156,13 @@ class ChangePasswordRequest(BaseModel):
     @classmethod
     def _validate_new_password(cls, v: str) -> str:
         if len(v) < 10:
-            raise ValueError("密码至少 10 位")
+            raise ValueError("Password must be at least 10 characters")
         if len(v) > 128:
-            raise ValueError("密码过长（最多 128 位）")
+            raise ValueError("Password too long (128 characters max)")
         if not any(c.isalpha() for c in v):
-            raise ValueError("密码需包含字母")
+            raise ValueError("Password must contain a letter")
         if not any(c.isdigit() for c in v):
-            raise ValueError("密码需包含数字")
+            raise ValueError("Password must contain a digit")
         return v
 
 
@@ -169,7 +173,7 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ):
     if not current_user.hashed_password or not verify_password(req.old_password, current_user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="旧密码不正确")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Old password is incorrect")
     current_user.hashed_password = get_password_hash(req.new_password)
     current_user.token_version += 1
     await db.commit()
@@ -188,10 +192,12 @@ async def delete_account(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """注销账号：密码确认防止 token 被盗后被人恶意销号。硬删除用户行——
-    这个网关本身不落地对话内容（proxy 是纯转发），没有别的用户数据要清。"""
+    """Delete the account: password confirmation prevents a stolen token from
+    being used to maliciously delete an account. Hard-deletes the user row —
+    this gateway itself doesn't persist conversation content (proxy.py is a
+    pure relay), so there's no other user data to clean up."""
     if not current_user.hashed_password or not verify_password(req.password, current_user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="密码不正确")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
     await db.delete(current_user)
     await db.commit()
     return {"status": "account deleted"}

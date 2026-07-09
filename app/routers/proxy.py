@@ -23,11 +23,12 @@ router = APIRouter()
 settings = get_settings()
 logger = logging.getLogger("saiyia.asr")
 
-# 阿里云 DashScope 代理端点
+# Alibaba Cloud DashScope proxy endpoint
 DASHSCOPE_BASE = settings.dashscope_base_url
 
-# 录音文件识别用的临时音频目录。DashScope 异步任务会从公网 URL 回源下载这些文件，
-# 识别完成（或失败/超时）后立即删除。
+# Temp directory for file-based transcription. DashScope's async task fetches
+# these files from a public URL; they're deleted right after recognition
+# finishes (success, failure, or timeout).
 TEMP_AUDIO_DIR = Path("/tmp/voice_asr_audio")
 TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -38,7 +39,7 @@ async def proxy_chat_completions(
     request: Request,
     current_user: User = Depends(get_current_user)
 ):
-    """代理 LLM 聊天请求到阿里云 DashScope"""
+    """Proxies an LLM chat request to Alibaba Cloud DashScope."""
     if not settings.alibaba_api_key:
         raise HTTPException(status_code=503, detail="Service not configured")
 
@@ -79,16 +80,20 @@ DASHSCOPE_WS_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 
 async def _cosyvoice_tts(text: str, voice: str, audio_format: str = "mp3", sample_rate: int = 22050) -> bytes:
-    """通过 DashScope CosyVoice WebSocket 合成语音，返回完整音频二进制。
+    """Synthesizes speech via DashScope's CosyVoice WebSocket API, returning the
+    complete audio as bytes.
 
-    CosyVoice 系列只支持 WebSocket（HTTP 同步端点会报 InvalidParameter）。协议：
-    连接 → run-task → 收 task-started → continue-task(文本) + finish-task → 收音频二进制帧 + task-finished。
+    CosyVoice models only support WebSocket (the synchronous HTTP endpoint
+    returns InvalidParameter). Protocol: connect -> run-task -> receive
+    task-started -> continue-task(text) + finish-task -> receive binary audio
+    frames + task-finished.
     """
     task_id = uuid.uuid4().hex
     audio = bytearray()
     headers = {"Authorization": f"Bearer {settings.alibaba_api_key}"}
 
-    # websockets 不同版本 header 参数名不同（additional_headers / extra_headers）
+    # Different versions of the `websockets` package use different header
+    # kwarg names (additional_headers / extra_headers)
     try:
         ws = await websockets.connect(DASHSCOPE_WS_URL, additional_headers=headers, max_size=None)
     except TypeError:
@@ -134,11 +139,14 @@ async def _cosyvoice_tts(text: str, voice: str, audio_format: str = "mp3", sampl
 
 
 async def _cosyvoice_tts_pcm_stream(text: str, voice: str, sample_rate: int = 22050):
-    """与 _cosyvoice_tts 同协议，但请求 PCM 格式并把每个音频帧**边收边 yield**，
-    用于流式播放（首字延迟≈首帧合成时长，而非整句合成时长）。
+    """Same protocol as _cosyvoice_tts, but requests PCM and yields each audio
+    frame **as it arrives**, for streaming playback (first-audio latency is
+    roughly the first chunk's synthesis time, not the whole sentence's).
 
-    返回裸 PCM（16-bit little-endian / mono / sample_rate），客户端无需解码即可投给
-    AVAudioPlayerNode 增量播放。失败/无音频时直接结束（不 yield），由调用方/客户端回退。
+    Yields raw PCM (16-bit little-endian / mono / sample_rate) that the client
+    can feed straight into incremental playback (e.g. AVAudioPlayerNode)
+    without decoding. On failure or empty audio it just ends without
+    yielding anything, and it's up to the caller/client to fall back.
     """
     task_id = uuid.uuid4().hex
     headers = {"Authorization": f"Bearer {settings.alibaba_api_key}"}
@@ -191,7 +199,8 @@ async def proxy_tts(
     request: Request,
     current_user: User = Depends(get_current_user)
 ):
-    """CosyVoice 语音合成（WebSocket），直接返回音频二进制（audio/mpeg）。"""
+    """CosyVoice speech synthesis (over WebSocket), returns the audio bytes
+    directly (audio/mpeg)."""
     if not settings.alibaba_api_key:
         raise HTTPException(status_code=503, detail="Service not configured")
 
@@ -223,10 +232,13 @@ async def proxy_tts_stream(
     request: Request,
     current_user: User = Depends(get_current_user)
 ):
-    """CosyVoice 流式语音合成：边合成边把裸 PCM（16-bit LE / mono / 22050Hz）分块返回。
+    """CosyVoice streaming speech synthesis: returns raw PCM (16-bit LE / mono
+    / 22050Hz) in chunks as it's synthesized.
 
-    与 /audio/tts（一次性 MP3）并存，专供客户端流式播放降低首字延迟。
-    Content-Type 用 audio/L16 表明是裸 PCM，客户端按帧投给 AVAudioPlayerNode。
+    Coexists with /audio/tts (one-shot MP3) — this one is specifically for
+    clients that want to stream playback and reduce first-audio latency.
+    Content-Type is audio/L16 to signal raw PCM; the client feeds it frame by
+    frame into something like AVAudioPlayerNode.
     """
     if not settings.alibaba_api_key:
         raise HTTPException(status_code=503, detail="Service not configured")
@@ -246,7 +258,9 @@ async def proxy_tts_stream(
                 yield chunk
         except Exception as exc:
             logger.warning("TTS(stream) error: %s", exc)
-            # 流已开始无法再改状态码；直接结束，客户端按收到字节为空/不足回退系统 TTS
+            # Can't change the status code once streaming has started; just end
+            # the stream and let the client fall back to on-device TTS if it
+            # received empty/insufficient bytes
 
     return StreamingResponse(
         _gen(),
@@ -255,17 +269,21 @@ async def proxy_tts_stream(
 
 
 def _audio_sig(audio_id: str, exp: int) -> str:
-    """对临时音频 URL 做 HMAC 签名（key=SECRET_KEY），防止 UUID 泄露被未授权访问。"""
+    """HMAC-signs a temporary audio URL (keyed by SECRET_KEY), to prevent
+    unauthorized access even if the random file ID leaks."""
     msg = f"{audio_id}:{exp}".encode()
     return hmac.new(settings.secret_key.encode(), msg, hashlib.sha256).hexdigest()
 
 
 @router.get("/asr/audio/{audio_id}")
 async def serve_asr_audio(audio_id: str, exp: int = 0, sig: str = ""):
-    """把临时音频暴露给 DashScope 异步任务回源下载。
+    """Exposes a temporary audio file for DashScope's async task to fetch.
 
-    无鉴权（DashScope 回源不带 token），改用 HMAC 签名 + 5 分钟过期作为临时凭证：
-    URL 带 ?exp=&sig=，校验通过才返回文件。文件名随机 UUID、识别完成即删除。
+    Not JWT-authenticated (DashScope's fetch request carries no token) —
+    instead uses an HMAC signature plus a 5-minute expiry as a short-lived
+    credential: the URL carries ?exp=&sig=, and the file is only served if
+    that checks out. Filenames are random UUIDs and get deleted right after
+    recognition completes.
     """
     if "/" in audio_id or ".." in audio_id:
         raise HTTPException(status_code=400, detail="Bad audio id")
@@ -282,18 +300,20 @@ async def serve_asr_audio(audio_id: str, exp: int = 0, sig: str = ""):
 
 
 def _extract_text_from_transcription(payload: dict) -> str:
-    """从 paraformer-v2 录音文件识别结果里抽取纯文本（可含说话人前缀）。
+    """Extracts plain text (optionally with speaker labels) from a
+    paraformer-v2 file-transcription result.
 
-    transcription_url 指向的 JSON 结构形如：
+    The JSON at transcription_url looks like:
     {"transcripts": [{"text": "...", "sentences": [{"text": "...", "speaker_id": 0}, ...]}]}
-    开启说话人分离时，逐句加上 "说话人N：" 前缀；否则直接用整段 text。
+    When diarization is enabled, each sentence gets a "Speaker N:" prefix when
+    the speaker changes; otherwise we just use the whole-text field.
     """
     transcripts = payload.get("transcripts") or []
     if not transcripts:
         return ""
     first = transcripts[0]
     sentences = first.get("sentences") or []
-    # 句子里带 speaker_id 时，按发言人分段
+    # Group by speaker when sentences carry a speaker_id
     has_speaker = any("speaker_id" in s for s in sentences)
     if has_speaker:
         parts = []
@@ -304,7 +324,7 @@ def _extract_text_from_transcription(payload: dict) -> str:
             if not txt:
                 continue
             if spk != last_speaker:
-                parts.append(f"\n说话人{spk}：{txt}")
+                parts.append(f"\nSpeaker {spk}: {txt}")
                 last_speaker = spk
             else:
                 parts.append(txt)
@@ -318,11 +338,15 @@ async def proxy_asr(
     request: Request,
     current_user: User = Depends(get_current_user)
 ):
-    """录音文件识别：base64 音频 → 临时公网 URL → DashScope paraformer-v2 异步任务 → 轮询取结果。
+    """Full-recording transcription: base64 audio -> temporary public URL ->
+    DashScope paraformer-v2 async task -> poll for the result.
 
-    之所以不再用旧的 `/services/asr/recognition` 同步端点：那个端点配 paraformer-realtime-v2
-    会报 "task can not be null"（realtime 模型只能走 WebSocket）。录音文件识别（paraformer-v2）
-    是整段音频识别、原生支持说话人分离，正好匹配 app「录完再识别」的流程。
+    Why not the older synchronous `/services/asr/recognition` endpoint:
+    that one errors with "task can not be null" when configured for
+    paraformer-realtime-v2 (the realtime model only works over WebSocket).
+    File-based transcription (paraformer-v2) recognizes a whole recording at
+    once and natively supports speaker diarization, which matches a
+    "record, then transcribe" flow.
     """
     if not settings.alibaba_api_key:
         raise HTTPException(status_code=503, detail="Service not configured")
@@ -331,8 +355,10 @@ async def proxy_asr(
     audio_base64 = body.get("audio", "")
     audio_format = body.get("format", "m4a")
     enable_diarization = bool(body.get("diarization", False))
-    # 语言提示交给调用方指定，不写死中英——paraformer-v2 支持的语种更多（详见 README
-    # 的多语言支持说明），硬编码会人为限制住非中英用户
+    # Language hints are left to the caller rather than hardcoded to zh/en —
+    # paraformer-v2 supports more languages than that (see the README's
+    # language support section); hardcoding would arbitrarily lock out
+    # non-Chinese/English users
     language_hints = body.get("language_hints") or ["zh", "en"]
     if not isinstance(language_hints, list) or not all(isinstance(x, str) for x in language_hints):
         raise HTTPException(status_code=400, detail="language_hints must be a list of strings")
@@ -343,7 +369,7 @@ async def proxy_asr(
     if not audio_base64:
         raise HTTPException(status_code=400, detail="Missing audio data")
 
-    # 1. 落地临时音频文件，构造公网回源 URL
+    # 1. Write the temp audio file and build a public URL for it
     audio_id = f"{uuid.uuid4().hex}.{audio_format}"
     audio_path = TEMP_AUDIO_DIR / audio_id
     try:
@@ -351,7 +377,7 @@ async def proxy_asr(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid base64 audio: {exc}")
 
-    # 带 HMAC 签名 + 5 分钟过期，DashScope 回源时需带上 ?exp=&sig= 才能下载
+    # HMAC-signed with a 5-minute expiry; DashScope's fetch must include ?exp=&sig=
     _exp = int(time.time()) + 300
     _sig = _audio_sig(audio_id, _exp)
     file_url = f"{settings.public_base_url.rstrip('/')}/api/v1/asr/audio/{audio_id}?exp={_exp}&sig={_sig}"
@@ -364,7 +390,7 @@ async def proxy_asr(
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # 2. 提交异步任务
+            # 2. Submit the async task
             submit = await client.post(
                 f"{DASHSCOPE_BASE}/api/v1/services/audio/asr/transcription",
                 headers={**headers, "X-DashScope-Async": "enable"},
@@ -385,7 +411,8 @@ async def proxy_asr(
             if not task_id:
                 return {"text": "", "error": "no task_id", "raw": submit.json()}
 
-            # 3. 轮询任务（录音文件识别通常几秒内完成；最多约 30s）
+            # 3. Poll for completion (file transcription usually finishes within
+            # a few seconds; cap at roughly 30s)
             for _ in range(30):
                 await asyncio.sleep(1.0)
                 query = await client.post(
@@ -410,21 +437,24 @@ async def proxy_asr(
                     return {"text": "", "error": f"task {status}", "raw": query.json()}
             return {"text": "", "error": "timeout polling ASR task"}
     finally:
-        # 4. 不论成功失败都清理临时音频
+        # 4. Clean up the temp audio file regardless of success or failure
         audio_path.unlink(missing_ok=True)
 
 
-# ─── WebSocket 实时 ASR 中继 ─────────────────────────────────────────
-# 客户端连 wss://<你的部署域名>/api/v1/asr/stream，
-# 服务端透明代理到 wss://dashscope.aliyuncs.com/api-ws/v1/inference，
-# 双向转发所有消息（文本 JSON 指令 + 二进制 PCM 音频帧）。
+# --- Real-time ASR WebSocket relay -----------------------------------------
+# The client connects to wss://<your-deployment-domain>/api/v1/asr/stream,
+# and the server transparently proxies to
+# wss://dashscope.aliyuncs.com/api-ws/v1/inference, forwarding every message
+# in both directions (JSON text instructions + binary PCM audio frames).
 
 async def _ws_authenticate(ws: WebSocket) -> User | None:
-    """从 WebSocket 握手的 Authorization header 中校验 JWT。
-    WebSocket 不能用 FastAPI Depends，需手动提取。
-    浏览器原生 WebSocket API 没法在握手时自定义请求头（不像 iOS 用 Starscream 能自由设置
-    Authorization），所以网页端只能把 token 放在 query string 里；iOS 继续走 header，
-    两条路径都支持，谁能用就用谁，不互相影响。"""
+    """Validates the JWT from the WebSocket handshake's Authorization header.
+    WebSocket connections can't use FastAPI's Depends, so this is extracted
+    manually. Native browser WebSocket can't set custom headers at handshake
+    time (unlike, say, iOS's Starscream library, which can), so web clients
+    have to pass the token via query string instead; other clients keep using
+    the header. Both paths are supported and don't interfere with each other.
+    """
     auth = ws.headers.get("authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else ws.query_params.get("token", "")
     if not token:
@@ -450,7 +480,7 @@ async def _ws_authenticate(ws: WebSocket) -> User | None:
 
 @router.websocket("/asr/stream")
 async def asr_stream_relay(ws: WebSocket):
-    """实时 ASR WebSocket 透明中继：客户端 ⇄ 服务端 ⇄ DashScope。"""
+    """Real-time ASR WebSocket transparent relay: client <-> this server <-> DashScope."""
     user = await _ws_authenticate(ws)
     if not user:
         await ws.close(code=4001, reason="Unauthorized")
@@ -472,7 +502,7 @@ async def asr_stream_relay(ws: WebSocket):
             )
 
         async def client_to_upstream():
-            """客户端 → DashScope"""
+            """Client -> DashScope"""
             try:
                 while True:
                     data = await ws.receive()
@@ -487,7 +517,7 @@ async def asr_stream_relay(ws: WebSocket):
                 pass
 
         async def upstream_to_client():
-            """DashScope → 客户端"""
+            """DashScope -> Client"""
             try:
                 async for msg in upstream:
                     if isinstance(msg, (bytes, bytearray)):

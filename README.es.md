@@ -106,7 +106,7 @@ La pasarela en sí no te limita a ningún idioma — el límite lo marcan los mo
 
 Si tu hardware está dirigido a usuarios que hablan idiomas europeos, sustituye las partes de reconocimiento/síntesis de voz por otro proveedor (la capa de proxy es intercambiable — basta con apuntar las funciones correspondientes en `proxy.py` a otra API; el sistema de cuentas y la arquitectura general no necesitan cambiar). El chat no se ve afectado y funciona tal cual.
 
-Los textos de la interfaz (mensajes de error, etc.) están actualmente escritos directamente en chino — todavía no se ha hecho la internacionalización (i18n). Si tu cliente está dirigido a usuarios que no hablan chino, te sugerimos traducir en el lado del cliente por ahora; la pasarela solo devuelve el texto original en el campo `detail`, lo cual no afecta a la funcionalidad. Se aceptan PRs que añadan i18n para los mensajes de error del lado del servidor.
+Todos los textos del lado del servidor (mensajes de error, logs, etc.) están en inglés por defecto, sin capa de i18n — la pasarela solo devuelve el texto original en el campo `detail`. Si tu cliente está dirigido a usuarios que no hablan inglés, traduce en el lado del cliente. Se aceptan PRs que añadan i18n para los mensajes del lado del servidor.
 
 ## Estructura del proyecto
 
