@@ -1,6 +1,6 @@
 # saiyia
 
-**[English](README.en.md) | [Español](README.es.md) | [中文](README.md) | [日本語](README.ja.md)**
+**[English](README.md) | [Español](README.es.md) | [中文](README.zh.md) | [日本語](README.ja.md)**
 
 Un servidor de pasarela (gateway) de IA de voz de código abierto.
 

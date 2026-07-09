@@ -1,51 +1,51 @@
-# 赛鸭（saiyia）
+# saiyia
 
-**[English](README.en.md) | [Español](README.es.md) | [中文](README.md) | [日本語](README.ja.md)**
+**[English](README.md) | [Español](README.es.md) | [中文](README.zh.md) | [日本語](README.ja.md)**
 
-一个开源的语音 AI 网关服务端。
+An open-source voice AI gateway server.
 
-它只做一件事：给任何能开 WebSocket / 发 HTTP 请求的客户端（手机、网页、ESP32 等硬件）提供统一的账号体系 + AI 对话/语音识别/语音合成代理，不用自己直接持有第三方 AI 服务的密钥。适合拿来接硬件项目——比如一个带麦克风和喇叭的语音陪伴机器人。
+It does one thing: give any client that can open a WebSocket or make an HTTP request (phone, web, ESP32-class hardware) a unified account system plus a proxy for AI chat / speech recognition / speech synthesis, without that client ever holding a third-party AI provider's key. A good fit for hardware projects — e.g. a companion robot with a microphone and speaker.
 
-## 设计取舍
+## Design choices
 
-刻意保持精简，只做"账号 + AI 能力代理"这一件事：不含支付/订阅体系（`User` 模型没有任何订阅字段，所有账号默认平等，只做限流），不含多端数据云同步，不含后台管理面板。要不要收费、怎么收费、要不要存对话记录，都留给使用者自己决定和实现。
+Kept deliberately minimal — it only does "accounts + AI capability proxy": no payment/subscription system (the `User` model has no subscription fields at all, every account is equal, only rate-limited), no multi-device data sync, no admin panel. Whether to charge, how to charge, whether to persist conversation history — all of that is left for you to decide and implement on top.
 
-## 能力清单
+## API surface
 
-| 接口 | 说明 |
+| Endpoint | Description |
 |---|---|
-| `POST /api/v1/auth/register` `/login` `/me` `/logout` `/change-password` `/delete-account` | 账号体系，JWT 鉴权，`token_version` 机制支持登出即时吊销旧 token |
-| `POST /api/v1/chat/completions` | 代理到阿里云百炼大模型对话（OpenAI 兼容格式，支持流式） |
-| `POST /api/v1/audio/tts` | 一次性语音合成，返回完整 MP3 |
-| `POST /api/v1/audio/tts/stream` | 流式语音合成，边合成边吐裸 PCM（16-bit/mono/22050Hz），首字延迟低，适合边收边播 |
-| `POST /api/v1/asr` | 整段录音文件识别（原生支持多说话人分离） |
-| `WS /api/v1/asr/stream` | 实时流式语音识别中继，边说边出文字 |
+| `POST /api/v1/auth/register` `/login` `/me` `/logout` `/change-password` `/delete-account` | Account system, JWT auth, `token_version` mechanism supports instant revocation of old tokens on logout |
+| `POST /api/v1/chat/completions` | Proxies to Alibaba Cloud Model Studio (DashScope) chat completion (OpenAI-compatible format, streaming supported) |
+| `POST /api/v1/audio/tts` | One-shot speech synthesis, returns a complete MP3 |
+| `POST /api/v1/audio/tts/stream` | Streaming speech synthesis, emits raw PCM (16-bit/mono/22050Hz) as it's generated, low first-byte latency, good for play-as-you-receive |
+| `POST /api/v1/asr` | Full-recording transcription (native multi-speaker diarization support) |
+| `WS /api/v1/asr/stream` | Real-time streaming speech recognition relay, text comes back as you speak |
 
-## 快速开始
+## Quick start
 
 ```bash
-cp .env.example .env   # 填 SECRET_KEY、ALIBABA_API_KEY、DB_PASSWORD
+cp .env.example .env   # fill in SECRET_KEY, ALIBABA_API_KEY, DB_PASSWORD
 docker compose up -d --build
 curl http://localhost:8000/api/v1/health
 ```
 
-## 硬件接入（比如 ESP32）指南
+## Hardware integration guide (e.g. ESP32)
 
-### 鉴权
+### Auth
 
-先调 `/api/v1/auth/register` 或 `/login` 拿到 JWT，之后所有请求带 `Authorization: Bearer <token>`。
+Call `/api/v1/auth/register` or `/login` first to get a JWT, then send it as `Authorization: Bearer <token>` on every request.
 
-WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSocket 就是这样），也可以把 token 放 query string：`wss://.../asr/stream?token=xxx`，服务端两种方式都认。
+If your WebSocket client can't set custom headers on the handshake (this is true of native browser WebSocket), you can pass the token as a query string instead: `wss://.../asr/stream?token=xxx` — the server accepts either.
 
-### 实时语音识别协议
+### Real-time speech recognition protocol
 
-`WS /api/v1/asr/stream` 是对阿里云 DashScope 实时语音识别（paraformer-realtime-v2）协议的**透明中继**，服务端只做鉴权和转发，不改消息内容。连上后：
+`WS /api/v1/asr/stream` is a **transparent relay** to Alibaba Cloud DashScope's real-time speech recognition protocol (paraformer-realtime-v2) — the server only handles auth and forwarding, it doesn't touch message content. After connecting:
 
-1. 发一条 JSON 文本帧，开始一次识别任务：
+1. Send a JSON text frame to start a recognition task:
 
 ```json
 {
-  "header": { "action": "run-task", "task_id": "<32位十六进制随机ID>", "streaming": "duplex" },
+  "header": { "action": "run-task", "task_id": "<32-char hex random id>", "streaming": "duplex" },
   "payload": {
     "task_group": "audio",
     "task": "asr",
@@ -61,65 +61,65 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 }
 ```
 
-2. 收到 `{"header":{"event":"task-started"}}` 后，开始持续发送**二进制帧**：16kHz / 16-bit / 单声道 / 小端序的裸 PCM，每帧大小不限（几十毫秒到几百毫秒都行，越小延迟越低）。
+2. Once you receive `{"header":{"event":"task-started"}}`, start streaming **binary frames**: raw PCM at 16kHz / 16-bit / mono / little-endian. Frame size is up to you — anywhere from tens to hundreds of milliseconds, smaller means lower latency.
 
-3. 服务端会陆续推回文本帧：
-
-```json
-{"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"你好","sentence_end":false}}}}
-```
-
-`sentence_end: false` 是临时识别结果（还在说），`true` 是一句话说完的最终结果。
-
-4. 说完一句/结束时发 `finish-task`：
+3. The server will push text frames back as recognition progresses:
 
 ```json
-{"header":{"action":"finish-task","task_id":"<同上>","streaming":"duplex"},"payload":{"input":{}}}
+{"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"hello","sentence_end":false}}}}
 ```
 
-**ESP32 上推荐用 [ESP-SR](https://github.com/espressif/esp-sr) 做本地唤醒词检测 + 硬件级回声消除（AEC）**，检测到唤醒词后再开这条 WebSocket 连接、开始推流——这样可以做到"AI 说话时开口就能打断"，AEC 靠 ESP-SR 的音频前端处理，不用在服务端或应用层额外做。
+`sentence_end: false` is an interim result (still speaking), `true` means that sentence is final.
 
-### 语音合成
-
-`POST /api/v1/audio/tts/stream`，body：
+4. When done, send `finish-task`:
 
 ```json
-{ "input": { "text": "要合成的文字" }, "voice": "longxiaochun" }
+{"header":{"action":"finish-task","task_id":"<same as above>","streaming":"duplex"},"payload":{"input":{}}}
 ```
 
-响应是 `Content-Type: audio/L16; rate=22050; channels=1` 的裸 PCM 流，边收边喂给音频输出（比如 ESP32 的 I2S 播放）即可，不需要解码。
+**On ESP32, we recommend using [ESP-SR](https://github.com/espressif/esp-sr) for local wake-word detection and hardware-level acoustic echo cancellation (AEC).** Open this WebSocket and start streaming after wake-word detection fires — this is what makes "the user can interrupt while the AI is talking" work well; the AEC is handled by ESP-SR's audio front-end, no extra work needed at the server or application layer.
 
-### 对话
+### Speech synthesis
 
-`POST /api/v1/chat/completions`，OpenAI 兼容格式（`messages` 数组），支持 `"stream": true` 做流式输出，逐 token 拼起来送给 TTS 就是完整的"识别→对话→合成"闭环。
+`POST /api/v1/audio/tts/stream`, body:
 
-## 多语言支持说明
+```json
+{ "input": { "text": "text to synthesize" }, "voice": "longxiaochun" }
+```
 
-这个网关本身不限定语言，能力上限取决于它代理的阿里云百炼模型。**先说清楚一个容易误解的点**：DashScope 的语音识别/合成模型主打中文和亚洲语种，覆盖面不是"任意主流语言都支持"——比如西班牙语、法语、德语这类欧洲语种，语音侧（识别/合成）目前不在 paraformer / CosyVoice 的主力支持范围内，用之前建议先用官方 Playground 实测；文字对话侧（chat）不受此限制，任何语言都能聊。
+The response is a raw PCM stream with `Content-Type: audio/L16; rate=22050; channels=1` — feed it straight to your audio output (e.g. ESP32's I2S playback) as you receive it, no decoding needed.
 
-| 能力 | 语言支持方式 | 已知支持的主流语言 |
+### Chat
+
+`POST /api/v1/chat/completions`, OpenAI-compatible format (a `messages` array), supports `"stream": true` for token-by-token streaming output. Pipe the streamed tokens straight into TTS and you have a full "listen → think → speak" loop.
+
+## Language support
+
+The gateway itself doesn't lock you into any language — the ceiling is set by the DashScope models it proxies to. **One thing worth clarifying up front**: DashScope's speech models (recognition/synthesis) are primarily built for Chinese and Asian languages — this is not "every mainstream language is supported." European languages like Spanish, French, or German are currently outside the main coverage of paraformer / CosyVoice on the speech side; test against the official Playground before relying on it. Text chat is not affected by this — any language works there.
+
+| Capability | How language is controlled | Known supported mainstream languages |
 |---|---|---|
-| `chat/completions` 对话 | 不限语言，模型能理解和回复什么语言就支持什么语言，由 prompt 里用的语言决定，不需要额外配置 | 中、英、日、韩、法、德、西等主流语言均可正常对话（大模型的语言能力，跟下面两行的语音专用模型是两回事） |
-| `asr`（整段录音识别） | 请求体里的 `language_hints` 参数控制，默认 `["zh", "en"]`，传其他语种代码给模型做识别提示 | 中文（含粤语等方言）、英文、日语、韩语，具体以 [paraformer-v2 官方文档](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) 实时更新的语种列表为准 |
-| `asr/stream`（实时流式识别） | 透明中继，语言/模型完全由客户端在 `run-task` 消息的 `parameters` 里自己指定，网关不做任何限制或改写 | 同上（paraformer-realtime-v2） |
-| `audio/tts` `/tts/stream` 语音合成 | 由请求体的 `voice` 参数决定音色，不同音色对应不同语言/口音 | 中文（含川渝、粤语等方言音色）、英文为主，日韩语音色以 [CosyVoice 音色列表](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) 实时更新为准 |
+| `chat/completions` | No language restriction — the model understands and replies in whatever language your prompt uses, no extra configuration needed | Chinese, English, Japanese, Korean, French, German, Spanish and other mainstream languages all work for chat (this is the LLM's general language ability, a separate thing from the speech-specific models below) |
+| `asr` (full-recording transcription) | Controlled by the `language_hints` field in the request body, defaults to `["zh", "en"]`; pass other language codes as recognition hints | Chinese (including dialects like Cantonese), English, Japanese, Korean — check the [paraformer-v2 docs](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) for the current, up-to-date language list |
+| `asr/stream` (real-time recognition) | Transparent relay — language/model is entirely up to what the client specifies in the `run-task` message's `parameters`; the gateway does not restrict or rewrite anything | Same as above (paraformer-realtime-v2) |
+| `audio/tts` / `/tts/stream` | Determined by the `voice` parameter in the request body — different voices correspond to different languages/accents | Chinese (including regional-accent voices) and English are the primary coverage; Japanese/Korean voices vary — check the [CosyVoice voice list](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) for what's currently available |
 
-如果你的硬件面向欧洲语种用户，语音识别/合成这两段建议换成别的服务商（网关的代理层是可替换的，改 `proxy.py` 里对应函数指向别的 API 即可，账号体系和整体架构不用动）；对话能力不受影响，可以直接用。
+If your hardware targets users speaking European languages, swap out the speech recognition/synthesis legs for a different provider (the proxy layer is swappable — just point the relevant functions in `proxy.py` at a different API; the account system and overall architecture don't need to change). Chat isn't affected and works as-is.
 
-界面文案（错误提示等）目前是中文硬编码，还没做 i18n；如果你的客户端面向非中文用户，建议在客户端层面自己做文案翻译，网关只返回 `detail` 字段的原始文本，不影响功能本身。欢迎提 PR 补充服务端错误文案的 i18n。
+UI-facing strings (error messages, etc.) are currently hardcoded in Chinese — i18n for those hasn't been done yet. If your client targets non-Chinese-speaking users, we'd suggest translating on the client side for now; the gateway just returns the raw text in the `detail` field, which doesn't affect functionality. PRs adding i18n for server-side error messages are welcome.
 
-## 项目结构
+## Project structure
 
 ```
 app/
-├── config.py       # 环境变量配置
-├── database.py     # User 模型 + 数据库连接
-├── security.py     # 密码哈希、JWT
-├── ratelimit.py     # 接口限流
-├── main.py          # FastAPI 入口
+├── config.py       # Environment variable configuration
+├── database.py     # User model + database connection
+├── security.py     # Password hashing, JWT
+├── ratelimit.py     # Rate limiting
+├── main.py          # FastAPI entrypoint
 └── routers/
-    ├── auth.py       # 注册/登录/账号管理
-    ├── proxy.py       # 核心：对话/语音识别/语音合成代理
+    ├── auth.py       # Register/login/account management
+    ├── proxy.py       # Core: chat/ASR/TTS proxy
     └── health.py
 ```
 
