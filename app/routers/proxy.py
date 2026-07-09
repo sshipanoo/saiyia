@@ -331,6 +331,11 @@ async def proxy_asr(
     audio_base64 = body.get("audio", "")
     audio_format = body.get("format", "m4a")
     enable_diarization = bool(body.get("diarization", False))
+    # 语言提示交给调用方指定，不写死中英——paraformer-v2 支持的语种更多（详见 README
+    # 的多语言支持说明），硬编码会人为限制住非中英用户
+    language_hints = body.get("language_hints") or ["zh", "en"]
+    if not isinstance(language_hints, list) or not all(isinstance(x, str) for x in language_hints):
+        raise HTTPException(status_code=400, detail="language_hints must be a list of strings")
 
     _ALLOWED_AUDIO_FORMATS = {"m4a", "wav", "mp3", "pcm", "ogg", "flac", "aac"}
     if audio_format not in _ALLOWED_AUDIO_FORMATS:
@@ -367,7 +372,7 @@ async def proxy_asr(
                     "model": "paraformer-v2",
                     "input": {"file_urls": [file_url]},
                     "parameters": {
-                        "language_hints": ["zh", "en"],
+                        "language_hints": language_hints,
                         "diarization_enabled": enable_diarization,
                     },
                 },

@@ -1,5 +1,7 @@
 # 赛鸭（saiyia）
 
+**[中文](README.md) | [English](README.en.md)**
+
 一个开源的语音 AI 网关服务端。
 
 它只做一件事：给任何能开 WebSocket / 发 HTTP 请求的客户端（手机、网页、ESP32 等硬件）提供统一的账号体系 + AI 对话/语音识别/语音合成代理，不用自己直接持有第三方 AI 服务的密钥。适合拿来接硬件项目——比如一个带麦克风和喇叭的语音陪伴机器人。
@@ -90,6 +92,19 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 ### 对话
 
 `POST /api/v1/chat/completions`，OpenAI 兼容格式（`messages` 数组），支持 `"stream": true` 做流式输出，逐 token 拼起来送给 TTS 就是完整的"识别→对话→合成"闭环。
+
+## 多语言支持说明
+
+这个网关本身不限定语言，能力上限取决于它代理的阿里云百炼模型：
+
+| 能力 | 语言支持方式 |
+|---|---|
+| `chat/completions` 对话 | 不限语言，模型能理解和回复什么语言就支持什么语言，由 prompt 里用的语言决定，不需要额外配置 |
+| `asr`（整段录音识别） | 请求体里的 `language_hints` 参数控制，默认 `["zh", "en"]`，可以传其他语种代码（如 `["ja"]`、`["ko"]`）给模型做识别提示，具体支持哪些语种以 [paraformer-v2 官方文档](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) 为准 |
+| `asr/stream`（实时流式识别） | 这条路径是对 DashScope 协议的透明中继，语言/模型完全由客户端在 `run-task` 消息的 `parameters` 里自己指定，网关不做任何限制或改写 |
+| `audio/tts` `/tts/stream` 语音合成 | 由请求体的 `voice` 参数决定音色，不同音色对应不同语言/口音，可选值以 [CosyVoice 音色列表](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) 为准 |
+
+界面文案（错误提示等）目前是中文硬编码，还没做 i18n；如果你的客户端面向非中文用户，建议在客户端层面自己做文案翻译，网关只返回 `detail` 字段的原始文本，不影响功能本身。欢迎提 PR 补充服务端错误文案的 i18n。
 
 ## 项目结构
 
