@@ -123,6 +123,6 @@ app/
     └── health.py
 ```
 
-## License
+## 许可协议
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE) —— 开源、可自由使用/修改/分发，但仅限非商业用途（个人项目、研究、业余硬件开发等）。商业使用需要联系版权方另行获取授权。

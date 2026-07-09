@@ -125,4 +125,4 @@ app/
 
 ## Licencia
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE) — de código abierto, libre de usar, modificar y distribuir para cualquier fin no comercial (proyectos personales, investigación, hardware de aficionado, etc.). El uso comercial requiere una licencia separada del titular de los derechos.

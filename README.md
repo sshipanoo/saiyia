@@ -125,4 +125,4 @@ app/
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE) — free to use, modify, and distribute for any noncommercial purpose (personal projects, research, hobby hardware builds, etc.). Commercial use requires a separate license from the copyright holder.
