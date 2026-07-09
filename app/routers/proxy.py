@@ -21,7 +21,7 @@ from app.ratelimit import limiter
 
 router = APIRouter()
 settings = get_settings()
-logger = logging.getLogger("voice.asr")
+logger = logging.getLogger("saiyia.asr")
 
 # 阿里云 DashScope 代理端点
 DASHSCOPE_BASE = settings.dashscope_base_url
@@ -410,7 +410,7 @@ async def proxy_asr(
 
 
 # ─── WebSocket 实时 ASR 中继 ─────────────────────────────────────────
-# 客户端连 wss://saiyia.com:8443/api/v1/asr/stream，
+# 客户端连 wss://<你的部署域名>/api/v1/asr/stream，
 # 服务端透明代理到 wss://dashscope.aliyuncs.com/api-ws/v1/inference，
 # 双向转发所有消息（文本 JSON 指令 + 二进制 PCM 音频帧）。
 

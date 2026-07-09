@@ -2,7 +2,7 @@ import logging
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
-_log = logging.getLogger("voice.config")
+_log = logging.getLogger("saiyia.config")
 
 _INSECURE_SECRET = "change-me-in-production"
 
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # 回源下载音频，所以要把临时音频文件暴露成 URL 供它下载。
     public_base_url: str = "http://localhost:8000"
 
-    app_name: str = "Voice Server"
+    app_name: str = "赛鸭"
     debug: bool = False
 
     # 限流

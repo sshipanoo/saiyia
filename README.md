@@ -1,4 +1,4 @@
-# Voice Server
+# 赛鸭（saiyia）
 
 一个开源的语音 AI 网关服务端，从 [赛伊](https://saiyia.com)（一款语音优先的 AI 助理 App）里拆分出来。
 
