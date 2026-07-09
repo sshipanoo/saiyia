@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: voice-db
+    environment:
+      POSTGRES_USER: voice
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: voice
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voice"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - voice-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice-app
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - voice-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.9'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  voice-network:
+    driver: bridge
