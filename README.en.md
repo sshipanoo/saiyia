@@ -1,6 +1,6 @@
 # saiyia
 
-**[中文](README.md) | [English](README.en.md)**
+**[中文](README.md) | [English](README.en.md) | [Español](README.es.md) | [日本語](README.ja.md)**
 
 An open-source voice AI gateway server.
 
