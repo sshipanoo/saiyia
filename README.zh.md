@@ -1,4 +1,4 @@
-# 赛鸭（saiyia）
+# saiyia
 
 **[English](README.md) | [Español](README.es.md) | [中文](README.zh.md) | [日本語](README.ja.md)**
 
@@ -10,21 +10,32 @@
 
 刻意保持精简，只做"账号 + AI 能力代理"这一件事：不含支付/订阅体系（`User` 模型没有任何订阅字段，所有账号默认平等，只做限流），不含多端数据云同步，不含后台管理面板。要不要收费、怎么收费、要不要存对话记录，都留给使用者自己决定和实现。
 
+## 服务商支持
+
+对话、语音识别、语音合成这三项能力**各自独立**选择服务商，不会被绑死在一家。在 `.env` 里设置 `CHAT_PROVIDER` / `ASR_PROVIDER` / `TTS_PROVIDER`：
+
+| 服务商 | 对话 | 整段录音识别 | 流式语音合成 | 备注 |
+|---|---|---|---|---|
+| `dashscope`（默认） | ✅ | ✅（原生支持说话人分离） | ✅ | 阿里云百炼 |
+| `openai` | ✅ | ✅（Whisper，不支持说话人分离） | ✅ | 对话侧也兼容任何 OpenAI 协议的接口（Groq、Together、DeepSeek、自建 vLLM 服务等），改 `OPENAI_BASE_URL` 指向别处即可 |
+
+**新增服务商不需要改动整个项目**——看 `app/providers/`：`chat.py` 只是解析出一对 `(base_url, api_key)`（大多数大模型服务商都兼容 OpenAI 协议，通常根本不用写新代码）；`tts.py` 和 `asr.py` 各自定义了一个小接口，每接一个新服务商实现一次就行。实时流式识别（`WS /asr/stream`）完全不需要适配层——它是纯字节/文本透明中继，能对接**任何**基于 WebSocket 的实时语音服务，改 `REALTIME_ASR_WS_URL` / `REALTIME_ASR_AUTH_HEADER` 指过去即可。
+
 ## 能力清单
 
 | 接口 | 说明 |
 |---|---|
 | `POST /api/v1/auth/register` `/login` `/me` `/logout` `/change-password` `/delete-account` | 账号体系，JWT 鉴权，`token_version` 机制支持登出即时吊销旧 token |
-| `POST /api/v1/chat/completions` | 代理到阿里云百炼大模型对话（OpenAI 兼容格式，支持流式） |
+| `POST /api/v1/chat/completions` | 代理到 `CHAT_PROVIDER` 选定的服务商（OpenAI 兼容格式，支持流式） |
 | `POST /api/v1/audio/tts` | 一次性语音合成，返回完整 MP3 |
-| `POST /api/v1/audio/tts/stream` | 流式语音合成，边合成边吐裸 PCM（16-bit/mono/22050Hz），首字延迟低，适合边收边播 |
-| `POST /api/v1/asr` | 整段录音文件识别（原生支持多说话人分离） |
+| `POST /api/v1/audio/tts/stream` | 流式语音合成，边合成边吐裸 PCM（采样率因服务商而异，响应的 `Content-Type` 里带具体值），首字延迟低，适合边收边播 |
+| `POST /api/v1/asr` | 整段录音文件识别 |
 | `WS /api/v1/asr/stream` | 实时流式语音识别中继，边说边出文字 |
 
 ## 快速开始
 
 ```bash
-cp .env.example .env   # 填 SECRET_KEY、ALIBABA_API_KEY、DB_PASSWORD
+cp .env.example .env   # 填 SECRET_KEY、ALIBABA_API_KEY（或 OPENAI_API_KEY）、DB_PASSWORD
 docker compose up -d --build
 curl http://localhost:8000/api/v1/health
 ```
@@ -39,7 +50,7 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 
 ### 实时语音识别协议
 
-`WS /api/v1/asr/stream` 是对阿里云 DashScope 实时语音识别（paraformer-realtime-v2）协议的**透明中继**，服务端只做鉴权和转发，不改消息内容。连上后：
+`WS /api/v1/asr/stream` 是对 `REALTIME_ASR_WS_URL` 指向的 WebSocket 端点（默认是阿里云 DashScope 的 paraformer-realtime-v2）的**透明中继**，服务端只做鉴权和转发，不改消息内容。用默认的 DashScope 服务商时，连上后：
 
 1. 发一条 JSON 文本帧，开始一次识别任务：
 
@@ -77,6 +88,8 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 {"header":{"action":"finish-task","task_id":"<同上>","streaming":"duplex"},"payload":{"input":{}}}
 ```
 
+如果把 `REALTIME_ASR_WS_URL` 指向别的服务商（比如 OpenAI 的 Realtime API），协议格式就按对方的来——中继本身不关心协议内容。
+
 **ESP32 上推荐用 [ESP-SR](https://github.com/espressif/esp-sr) 做本地唤醒词检测 + 硬件级回声消除（AEC）**，检测到唤醒词后再开这条 WebSocket 连接、开始推流——这样可以做到"AI 说话时开口就能打断"，AEC 靠 ESP-SR 的音频前端处理，不用在服务端或应用层额外做。
 
 ### 语音合成
@@ -87,7 +100,7 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 { "input": { "text": "要合成的文字" }, "voice": "longxiaochun" }
 ```
 
-响应是 `Content-Type: audio/L16; rate=22050; channels=1` 的裸 PCM 流，边收边喂给音频输出（比如 ESP32 的 I2S 播放）即可，不需要解码。
+响应是裸 PCM 流——具体采样率看响应头 `Content-Type`（`audio/L16; rate=<N>; channels=1`），因服务商而异（DashScope 是 22050Hz，OpenAI 是 24000Hz）。边收边喂给音频输出（比如 ESP32 的 I2S 播放）即可，不需要解码。`voice` 参数的取值也是服务商专属的——DashScope 的 CosyVoice 音色 vs OpenAI 的（`alloy`、`echo`、`fable`……）。
 
 ### 对话
 
@@ -95,16 +108,16 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 
 ## 多语言支持说明
 
-这个网关本身不限定语言，能力上限取决于它代理的阿里云百炼模型。**先说清楚一个容易误解的点**：DashScope 的语音识别/合成模型主打中文和亚洲语种，覆盖面不是"任意主流语言都支持"——比如西班牙语、法语、德语这类欧洲语种，语音侧（识别/合成）目前不在 paraformer / CosyVoice 的主力支持范围内，用之前建议先用官方 Playground 实测；文字对话侧（chat）不受此限制，任何语言都能聊。
+语言覆盖面完全取决于每项能力选用的服务商——网关本身不做任何限制。
 
-| 能力 | 语言支持方式 | 已知支持的主流语言 |
-|---|---|---|
-| `chat/completions` 对话 | 不限语言，模型能理解和回复什么语言就支持什么语言，由 prompt 里用的语言决定，不需要额外配置 | 中、英、日、韩、法、德、西等主流语言均可正常对话（大模型的语言能力，跟下面两行的语音专用模型是两回事） |
-| `asr`（整段录音识别） | 请求体里的 `language_hints` 参数控制，默认 `["zh", "en"]`，传其他语种代码给模型做识别提示 | 中文（含粤语等方言）、英文、日语、韩语，具体以 [paraformer-v2 官方文档](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) 实时更新的语种列表为准 |
-| `asr/stream`（实时流式识别） | 透明中继，语言/模型完全由客户端在 `run-task` 消息的 `parameters` 里自己指定，网关不做任何限制或改写 | 同上（paraformer-realtime-v2） |
-| `audio/tts` `/tts/stream` 语音合成 | 由请求体的 `voice` 参数决定音色，不同音色对应不同语言/口音 | 中文（含川渝、粤语等方言音色）、英文为主，日韩语音色以 [CosyVoice 音色列表](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) 实时更新为准 |
+| 能力 | 语言控制方式 | DashScope 覆盖 | OpenAI 覆盖 |
+|---|---|---|---|
+| `chat/completions` | 两个服务商都不限语言，模型跟着 prompt 用的语言回复 | 中、英、日、韩、法、德、西等主流语言均可 | 同样支持广泛的多语言 |
+| `asr`（整段录音识别） | DashScope 用请求体的 `language_hints` 参数；OpenAI Whisper 自动检测或指定单一语言代码 | 中文（含粤语等方言）、英文、日语、韩语，见 [paraformer-v2 文档](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) | Whisper 覆盖 50+ 种语言，包括西班牙语、法语、德语等 DashScope 大多不覆盖的语种——如果需要大范围欧洲语种识别，用 `ASR_PROVIDER=openai` 更省事 |
+| `asr/stream`（实时识别） | 取决于 `REALTIME_ASR_WS_URL` 指向的上游服务商支持什么 | paraformer-realtime-v2 的语种范围（同上） | 默认不直接支持，需要自己把 `REALTIME_ASR_WS_URL` 指向兼容 OpenAI 协议的实时端点 |
+| `audio/tts` `/tts/stream` 语音合成 | `voice` 参数，取值是服务商专属的音色列表 | 中文（含方言音色）、英文为主，见 [CosyVoice 音色列表](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) | OpenAI 的音色以英文为主，但合成其他语言效果也基本可用 |
 
-如果你的硬件面向欧洲语种用户，语音识别/合成这两段建议换成别的服务商（网关的代理层是可替换的，改 `proxy.py` 里对应函数指向别的 API 即可，账号体系和整体架构不用动）；对话能力不受影响，可以直接用。
+**一句话总结**：如果硬件面向欧洲语种用户，`ASR_PROVIDER=openai` + `TTS_PROVIDER=openai` 比硬逼 DashScope 支持要省心得多。对话侧两边都没问题。
 
 服务端所有文案（错误提示、日志等）默认是英文，没有做 i18n 层——网关只把原始文本放在 `detail` 字段里返回。如果你的客户端面向非英语用户，建议在客户端层面自己做文案翻译。欢迎提 PR 补充服务端文案的 i18n。
 
@@ -112,14 +125,18 @@ WebSocket 握手如果客户端不方便自定义 header（浏览器原生 WebSo
 
 ```
 app/
-├── config.py       # 环境变量配置
-├── database.py     # User 模型 + 数据库连接
-├── security.py     # 密码哈希、JWT
-├── ratelimit.py     # 接口限流
-├── main.py          # FastAPI 入口
+├── config.py           # 环境变量配置、服务商选择
+├── database.py         # User 模型 + 数据库连接
+├── security.py         # 密码哈希、JWT
+├── ratelimit.py         # 接口限流
+├── main.py              # FastAPI 入口
+├── providers/
+│   ├── chat.py           # 对话接口解析（OpenAI 兼容）
+│   ├── tts.py             # 语音合成服务商适配（DashScope、OpenAI）
+│   └── asr.py             # 整段录音识别服务商适配（DashScope、OpenAI）
 └── routers/
-    ├── auth.py       # 注册/登录/账号管理
-    ├── proxy.py       # 核心：对话/语音识别/语音合成代理
+    ├── auth.py            # 注册/登录/账号管理
+    ├── proxy.py            # 核心：对话/语音识别/语音合成代理，分发到各服务商
     └── health.py
 ```
 

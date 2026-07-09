@@ -10,21 +10,32 @@ It does one thing: give any client that can open a WebSocket or make an HTTP req
 
 Kept deliberately minimal — it only does "accounts + AI capability proxy": no payment/subscription system (the `User` model has no subscription fields at all, every account is equal, only rate-limited), no multi-device data sync, no admin panel. Whether to charge, how to charge, whether to persist conversation history — all of that is left for you to decide and implement on top.
 
+## Provider support
+
+Chat, speech-to-text, and text-to-speech each pick a provider **independently** — you're not locked into one vendor for everything. Set `CHAT_PROVIDER` / `ASR_PROVIDER` / `TTS_PROVIDER` in your `.env`:
+
+| Provider | Chat | File-based ASR | Streaming TTS | Notes |
+|---|---|---|---|---|
+| `dashscope` (default) | ✅ | ✅ (native speaker diarization) | ✅ | Alibaba Cloud Model Studio |
+| `openai` | ✅ | ✅ (Whisper, no diarization) | ✅ | Also works with any OpenAI-compatible endpoint (Groq, Together, DeepSeek, a self-hosted vLLM server, etc.) for chat by pointing `OPENAI_BASE_URL` elsewhere |
+
+**Adding a provider isn't a fork-the-whole-project affair** — see `app/providers/`: `chat.py` just resolves a `(base_url, api_key)` pair (most LLM providers are OpenAI-compatible, so this usually needs no new code at all), while `tts.py` and `asr.py` each define a small `Protocol` interface you implement once per vendor. Real-time streaming ASR (`WS /asr/stream`) needs no adapter at all — it's a transparent byte/text relay, so it works with *any* WebSocket-based realtime speech API; just point `REALTIME_ASR_WS_URL` / `REALTIME_ASR_AUTH_HEADER` at it.
+
 ## API surface
 
 | Endpoint | Description |
 |---|---|
 | `POST /api/v1/auth/register` `/login` `/me` `/logout` `/change-password` `/delete-account` | Account system, JWT auth, `token_version` mechanism supports instant revocation of old tokens on logout |
-| `POST /api/v1/chat/completions` | Proxies to Alibaba Cloud Model Studio (DashScope) chat completion (OpenAI-compatible format, streaming supported) |
+| `POST /api/v1/chat/completions` | Proxies to whichever provider `CHAT_PROVIDER` selects (OpenAI-compatible format, streaming supported) |
 | `POST /api/v1/audio/tts` | One-shot speech synthesis, returns a complete MP3 |
-| `POST /api/v1/audio/tts/stream` | Streaming speech synthesis, emits raw PCM (16-bit/mono/22050Hz) as it's generated, low first-byte latency, good for play-as-you-receive |
-| `POST /api/v1/asr` | Full-recording transcription (native multi-speaker diarization support) |
+| `POST /api/v1/audio/tts/stream` | Streaming speech synthesis, emits raw PCM as it's generated (sample rate depends on the provider — carried in the response's `Content-Type`), low first-byte latency, good for play-as-you-receive |
+| `POST /api/v1/asr` | Full-recording transcription |
 | `WS /api/v1/asr/stream` | Real-time streaming speech recognition relay, text comes back as you speak |
 
 ## Quick start
 
 ```bash
-cp .env.example .env   # fill in SECRET_KEY, ALIBABA_API_KEY, DB_PASSWORD
+cp .env.example .env   # fill in SECRET_KEY, ALIBABA_API_KEY (or OPENAI_API_KEY), DB_PASSWORD
 docker compose up -d --build
 curl http://localhost:8000/api/v1/health
 ```
@@ -39,7 +50,7 @@ If your WebSocket client can't set custom headers on the handshake (this is true
 
 ### Real-time speech recognition protocol
 
-`WS /api/v1/asr/stream` is a **transparent relay** to Alibaba Cloud DashScope's real-time speech recognition protocol (paraformer-realtime-v2) — the server only handles auth and forwarding, it doesn't touch message content. After connecting:
+`WS /api/v1/asr/stream` is a **transparent relay** to whichever WebSocket endpoint `REALTIME_ASR_WS_URL` points at (Alibaba Cloud DashScope's paraformer-realtime-v2 by default) — the server only handles auth and forwarding, it doesn't touch message content. With the default DashScope provider, after connecting:
 
 1. Send a JSON text frame to start a recognition task:
 
@@ -77,6 +88,8 @@ If your WebSocket client can't set custom headers on the handshake (this is true
 {"header":{"action":"finish-task","task_id":"<same as above>","streaming":"duplex"},"payload":{"input":{}}}
 ```
 
+If you point `REALTIME_ASR_WS_URL` at a different provider (e.g. OpenAI's Realtime API), follow that provider's own message format instead — the relay itself is protocol-agnostic.
+
 **On ESP32, we recommend using [ESP-SR](https://github.com/espressif/esp-sr) for local wake-word detection and hardware-level acoustic echo cancellation (AEC).** Open this WebSocket and start streaming after wake-word detection fires — this is what makes "the user can interrupt while the AI is talking" work well; the AEC is handled by ESP-SR's audio front-end, no extra work needed at the server or application layer.
 
 ### Speech synthesis
@@ -87,7 +100,7 @@ If your WebSocket client can't set custom headers on the handshake (this is true
 { "input": { "text": "text to synthesize" }, "voice": "longxiaochun" }
 ```
 
-The response is a raw PCM stream with `Content-Type: audio/L16; rate=22050; channels=1` — feed it straight to your audio output (e.g. ESP32's I2S playback) as you receive it, no decoding needed.
+The response is a raw PCM stream — check the `Content-Type` header (`audio/L16; rate=<N>; channels=1`) for the actual sample rate, since it depends on the provider (DashScope: 22050Hz, OpenAI: 24000Hz). Feed it straight to your audio output (e.g. ESP32's I2S playback) as you receive it, no decoding needed. The `voice` value is provider-specific — DashScope's CosyVoice voices vs. OpenAI's (`alloy`, `echo`, `fable`, ...).
 
 ### Chat
 
@@ -95,16 +108,16 @@ The response is a raw PCM stream with `Content-Type: audio/L16; rate=22050; chan
 
 ## Language support
 
-The gateway itself doesn't lock you into any language — the ceiling is set by the DashScope models it proxies to. **One thing worth clarifying up front**: DashScope's speech models (recognition/synthesis) are primarily built for Chinese and Asian languages — this is not "every mainstream language is supported." European languages like Spanish, French, or German are currently outside the main coverage of paraformer / CosyVoice on the speech side; test against the official Playground before relying on it. Text chat is not affected by this — any language works there.
+Language coverage depends entirely on which provider each capability uses — the gateway itself doesn't restrict anything.
 
-| Capability | How language is controlled | Known supported mainstream languages |
-|---|---|---|
-| `chat/completions` | No language restriction — the model understands and replies in whatever language your prompt uses, no extra configuration needed | Chinese, English, Japanese, Korean, French, German, Spanish and other mainstream languages all work for chat (this is the LLM's general language ability, a separate thing from the speech-specific models below) |
-| `asr` (full-recording transcription) | Controlled by the `language_hints` field in the request body, defaults to `["zh", "en"]`; pass other language codes as recognition hints | Chinese (including dialects like Cantonese), English, Japanese, Korean — check the [paraformer-v2 docs](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) for the current, up-to-date language list |
-| `asr/stream` (real-time recognition) | Transparent relay — language/model is entirely up to what the client specifies in the `run-task` message's `parameters`; the gateway does not restrict or rewrite anything | Same as above (paraformer-realtime-v2) |
-| `audio/tts` / `/tts/stream` | Determined by the `voice` parameter in the request body — different voices correspond to different languages/accents | Chinese (including regional-accent voices) and English are the primary coverage; Japanese/Korean voices vary — check the [CosyVoice voice list](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) for what's currently available |
+| Capability | How language is controlled | DashScope coverage | OpenAI coverage |
+|---|---|---|---|
+| `chat/completions` | No restriction for either provider — the model replies in whatever language your prompt uses | Chinese, English, Japanese, Korean, French, German, Spanish and other mainstream languages all work | Same — broad multilingual coverage |
+| `asr` (file transcription) | `language_hints` field in the request body (DashScope) or auto-detect / a single language code (OpenAI Whisper) | Chinese (incl. dialects like Cantonese), English, Japanese, Korean — see the [paraformer-v2 docs](https://help.aliyun.com/zh/model-studio/paraformer-speech-recognition) | Whisper covers 50+ languages including Spanish, French, German, and most of the languages DashScope doesn't — if you need broad European-language ASR, `ASR_PROVIDER=openai` is the easier path |
+| `asr/stream` (real-time) | Whatever the upstream `REALTIME_ASR_WS_URL` provider supports | paraformer-realtime-v2's language set (same as above) | N/A by default — point `REALTIME_ASR_WS_URL` at an OpenAI-compatible realtime endpoint if you want this |
+| `audio/tts` / `/tts/stream` | `voice` parameter, provider-specific voice list | Chinese (incl. regional accents) and English are the primary coverage — check the [CosyVoice voice list](https://help.aliyun.com/zh/model-studio/cosyvoice-speech-synthesis) | OpenAI's voices are English-first but produce reasonable output in many other languages too |
 
-If your hardware targets users speaking European languages, swap out the speech recognition/synthesis legs for a different provider (the proxy layer is swappable — just point the relevant functions in `proxy.py` at a different API; the account system and overall architecture don't need to change). Chat isn't affected and works as-is.
+**tl;dr**: if your hardware targets users speaking European languages, `ASR_PROVIDER=openai` and `TTS_PROVIDER=openai` will get you there faster than trying to force it through DashScope. Chat works well on either.
 
 All server-side strings (error messages, log lines, etc.) are in English by default, with no i18n layer — the gateway just returns the raw text in the `detail` field. If your client targets non-English-speaking users, translate on the client side. PRs adding i18n for server-side messages are welcome.
 
@@ -112,14 +125,18 @@ All server-side strings (error messages, log lines, etc.) are in English by defa
 
 ```
 app/
-├── config.py       # Environment variable configuration
-├── database.py     # User model + database connection
-├── security.py     # Password hashing, JWT
-├── ratelimit.py     # Rate limiting
-├── main.py          # FastAPI entrypoint
+├── config.py           # Environment variable configuration, provider selection
+├── database.py         # User model + database connection
+├── security.py         # Password hashing, JWT
+├── ratelimit.py         # Rate limiting
+├── main.py              # FastAPI entrypoint
+├── providers/
+│   ├── chat.py           # Chat endpoint resolver (OpenAI-compatible)
+│   ├── tts.py             # TTS provider adapters (DashScope, OpenAI)
+│   └── asr.py             # File-based ASR provider adapters (DashScope, OpenAI)
 └── routers/
-    ├── auth.py       # Register/login/account management
-    ├── proxy.py       # Core: chat/ASR/TTS proxy
+    ├── auth.py            # Register/login/account management
+    ├── proxy.py            # Core: chat/ASR/TTS proxy, dispatches to providers
     └── health.py
 ```
 
